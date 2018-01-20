@@ -1,0 +1,34 @@
+version: '3'
+services:
+  ingester:
+    build: ./
+    env_file: .env
+    depends_on:
+      - kafka
+      - macd-tracker
+  kafka:
+    image: ches/kafka
+    environment:
+      - ZOOKEEPER_IP=zookeeper
+    depends_on:
+      - zookeeper
+  zookeeper:
+    image: zookeeper:3.4
+  influx:
+    image: influxdb:latest
+    environment:
+      - INFLUXDB_DB=main
+      - INFLUXDB_WRITE_USER=user
+      - INFLUXDB_WRITE_USER_PASSWORD=pass
+    volumes:
+      - influxdb:/var/lib/influxdb
+  macd-tracker:
+    image: msull92/macd-tracker:latest
+    depends_on:
+      - kafka
+    environment:
+      - KAFKA_ENDPOINT=kafka:9092
+      - KAFKA_PRODUCER_TOPIC=macd-stats
+
+volumes:
+  influxdb:
