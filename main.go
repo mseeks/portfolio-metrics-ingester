@@ -26,8 +26,8 @@ type macdMessage struct {
 }
 
 type portfolioMessage struct {
-	Value string `json:"portfolio_value"`
-	At    string `json:"at"`
+	Value float32 `json:"portfolio_value"`
+	At    string  `json:"at"`
 }
 
 func main() {
@@ -151,16 +151,10 @@ func main() {
 								continue
 							}
 
-							portfolioValue, err := strconv.ParseFloat(stat.Value, 32)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
 							// Create a point and add to batch
 							tags := map[string]string{}
 							fields := map[string]interface{}{
-								"value": portfolioValue,
+								"value": stat.Value,
 							}
 
 							point, err := client.NewPoint("portfolio", tags, fields, timestamp)
