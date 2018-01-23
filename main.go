@@ -30,6 +30,17 @@ type portfolioMessage struct {
 	At    string  `json:"at"`
 }
 
+type positionsMessage struct {
+	Positions []struct {
+		AverageBuyPrice float32 `json:"average_buy_price"`
+		CurrentQuote    float32 `json:"current_quote"`
+		Name            string  `json:"name"`
+		Quantity        float32 `json:"quantity"`
+		Symbol          string  `json:"symbol"`
+	} `json:"positions"`
+	At string `json:"at"`
+}
+
 func main() {
 	broker := os.Getenv("KAFKA_ENDPOINT")
 	topics := strings.Split(os.Getenv("KAFKA_CONSUMER_TOPICS"), ",")
@@ -169,7 +180,44 @@ func main() {
 							}
 
 						case "portfolio-positions":
-							fmt.Println(topic)
+							positionsMessage := positionsMessage{}
+
+							err = json.Unmarshal(message.Value, &positionsMessage)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", positionsMessage.At)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							for _, position := range positionsMessage.Positions {
+								// Create a point and add to batch
+								tags := map[string]string{"symbol": position.Symbol}
+								fields := map[string]interface{}{
+									"buy_price": position.AverageBuyPrice,
+									"quote":     position.CurrentQuote,
+									"quantity":  position.Quantity,
+								}
+
+								point, err := client.NewPoint("positions", tags, fields, timestamp)
+								if err != nil {
+									fmt.Println(err)
+									continue
+								}
+								batch.AddPoint(point)
+
+								// Write the batch
+								err = influx.Write(batch)
+								if err != nil {
+									fmt.Println(err)
+									continue
+								}
+							}
+
 						case "portfolio-stats":
 							stat := portfolioMessage{}
 
