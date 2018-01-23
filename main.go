@@ -85,7 +85,41 @@ func main() {
 
 						switch topic {
 						case "equity-signals":
-							fmt.Println(topic)
+							equitySignal := signalMessage{}
+
+							err = json.Unmarshal(message.Value, &equitySignal)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", equitySignal.At)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							signal := equitySignal.Value
+
+							// Create a point and add to batch
+							tags := map[string]string{"symbol": symbol}
+							fields := map[string]interface{}{
+								"value": signal,
+							}
+
+							point, err := client.NewPoint("signals", tags, fields, timestamp)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+							batch.AddPoint(point)
+
+							// Write the batch
+							err = influx.Write(batch)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
 						case "macd-stats":
 							stat := macdMessage{}
 
