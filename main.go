@@ -20,9 +20,10 @@ type signalMessage struct {
 }
 
 type macdMessage struct {
-	Macd       string `json:"macd"`
-	MacdSignal string `json:"macd_signal"`
-	At         string `json:"at"`
+	Macd              string `json:"macd"`
+	MacdSignal        string `json:"macd_signal"`
+	MacdDecayedSignal string `json:"macd_decayed_signal"`
+	At                string `json:"at"`
 }
 
 type portfolioMessage struct {
@@ -158,11 +159,18 @@ func main() {
 								continue
 							}
 
+							decayedSignal, err := strconv.ParseFloat(stat.MacdDecayedSignal, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
 							// Create a point and add to batch
 							tags := map[string]string{"symbol": symbol}
 							fields := map[string]interface{}{
-								"value":  macd,
-								"signal": signal,
+								"value":          macd,
+								"signal":         signal,
+								"decayed_signal": decayedSignal,
 							}
 
 							point, err := client.NewPoint("macd", tags, fields, timestamp)
