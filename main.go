@@ -287,11 +287,23 @@ func main() {
 								continue
 							}
 
+							buyingPower, err := strconv.ParseFloat(stat.BuyingPower, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							equity, err := strconv.ParseFloat(stat.Equity, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
 							// Create a point and add to batch
 							tags := map[string]string{}
 							fields := map[string]interface{}{
-								"buying_power": stat.BuyingPower,
-								"equity":       stat.Equity,
+								"buying_power": buyingPower,
+								"equity":       equity,
 							}
 
 							point, err := client.NewPoint("portfolio", tags, fields, timestamp)
