@@ -32,8 +32,9 @@ type quoteMessage struct {
 }
 
 type portfolioMessage struct {
-	Value float32 `json:"portfolio_value"`
-	At    string  `json:"at"`
+	BuyingPower string `json:"buying_power"`
+	Equity      string `json:"equity"`
+	At          string `json:"at"`
 }
 
 type positionsMessage struct {
@@ -289,7 +290,8 @@ func main() {
 							// Create a point and add to batch
 							tags := map[string]string{}
 							fields := map[string]interface{}{
-								"value": stat.Value,
+								"buying_power": stat.BuyingPower,
+								"equity":       stat.Equity,
 							}
 
 							point, err := client.NewPoint("portfolio", tags, fields, timestamp)
