@@ -26,6 +26,11 @@ type macdMessage struct {
 	At                string `json:"at"`
 }
 
+type quoteMessage struct {
+	Quote string `json:"quote"`
+	At    string `json:"at"`
+}
+
 type portfolioMessage struct {
 	Value float32 `json:"portfolio_value"`
 	At    string  `json:"at"`
@@ -96,6 +101,46 @@ func main() {
 						}
 
 						switch topic {
+						case "equity-quotes":
+							equityQuote := quoteMessage{}
+
+							err = json.Unmarshal(message.Value, &equityQuote)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", equityQuote.At)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							quote, err := strconv.ParseFloat(equityQuote.Quote, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							// Create a point and add to batch
+							tags := map[string]string{"symbol": symbol}
+							fields := map[string]interface{}{
+								"quote": quote,
+							}
+
+							point, err := client.NewPoint("quotes", tags, fields, timestamp)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+							batch.AddPoint(point)
+
+							// Write the batch
+							err = influx.Write(batch)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
 						case "equity-signals":
 							equitySignal := signalMessage{}
 
