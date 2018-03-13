@@ -7,11 +7,16 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/Shopify/sarama"
+	cluster "github.com/bsm/sarama-cluster"
 	client "github.com/influxdata/influxdb/client/v2"
+)
+
+var (
+	broker        string
+	consumerGroup string
+	topics        []string
 )
 
 type signalMessage struct {
@@ -48,11 +53,15 @@ type positionsMessage struct {
 }
 
 func main() {
-	broker := os.Getenv("KAFKA_ENDPOINT")
-	topics := strings.Split(os.Getenv("KAFKA_CONSUMER_TOPICS"), ",")
+	broker = os.Getenv("KAFKA_ENDPOINT")
+	topics = strings.Split(os.Getenv("KAFKA_CONSUMER_TOPICS"), ",")
+	consumerGroup = os.Getenv("KAFKA_CONSUMER_GROUP")
+
+	brokers := []string{broker}
+	config := cluster.NewConfig()
 
 	for {
-		consumer, err := sarama.NewConsumer([]string{broker}, nil)
+		consumer, err := cluster.NewConsumer(brokers, consumerGroup, topics, config)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -69,66 +78,175 @@ func main() {
 			fmt.Println(err)
 			continue
 		}
+		defer influx.Close()
 
-		var waitgroup sync.WaitGroup
+		for {
+			select {
+			case message, ok := <-consumer.Messages():
+				if ok {
+					symbol := string(message.Key)
+					topic := message.Topic
+					fmt.Println(topic, "->", symbol, "->", string(message.Value))
 
-		for index := range topics {
-			waitgroup.Add(1)
+					// Create a new point batch
+					batch, err := client.NewBatchPoints(client.BatchPointsConfig{
+						Database:  os.Getenv("INFLUXDB_DATABASE"),
+						Precision: "s",
+					})
+					if err != nil {
+						log.Fatal(err)
+					}
 
-			go func(topic string) {
-				defer waitgroup.Done()
+					switch topic {
+					case "equity-quotes":
+						equityQuote := quoteMessage{}
 
-				partitionConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetOldest)
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-				defer partitionConsumer.Close()
-
-				for {
-					select {
-					case message := <-partitionConsumer.Messages():
-						symbol := string(message.Key)
-						fmt.Println(topic, "->", symbol, "->", string(message.Value))
-
-						// Create a new point batch
-						batch, err := client.NewBatchPoints(client.BatchPointsConfig{
-							Database:  os.Getenv("INFLUXDB_DATABASE"),
-							Precision: "s",
-						})
+						err = json.Unmarshal(message.Value, &equityQuote)
 						if err != nil {
-							log.Fatal(err)
+							fmt.Println(err)
+							continue
 						}
 
-						switch topic {
-						case "equity-quotes":
-							equityQuote := quoteMessage{}
+						timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", equityQuote.At)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
 
-							err = json.Unmarshal(message.Value, &equityQuote)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+						quote, err := strconv.ParseFloat(equityQuote.Quote, 32)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
 
-							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", equityQuote.At)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+						// Create a point and add to batch
+						tags := map[string]string{"symbol": symbol}
+						fields := map[string]interface{}{
+							"quote": quote,
+						}
 
-							quote, err := strconv.ParseFloat(equityQuote.Quote, 32)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+						point, err := client.NewPoint("quotes", tags, fields, timestamp)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+						batch.AddPoint(point)
 
+						// Write the batch
+						err = influx.Write(batch)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+					case "equity-signals":
+						equitySignal := signalMessage{}
+
+						err = json.Unmarshal(message.Value, &equitySignal)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", equitySignal.At)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						signal := equitySignal.Value
+
+						// Create a point and add to batch
+						tags := map[string]string{"symbol": symbol}
+						fields := map[string]interface{}{
+							"value": signal,
+						}
+
+						point, err := client.NewPoint("signals", tags, fields, timestamp)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+						batch.AddPoint(point)
+
+						// Write the batch
+						err = influx.Write(batch)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+					case "macd-stats":
+						stat := macdMessage{}
+
+						err = json.Unmarshal(message.Value, &stat)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", stat.At)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						macd, err := strconv.ParseFloat(stat.Macd, 32)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						signal, err := strconv.ParseFloat(stat.MacdSignal, 32)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						// Create a point and add to batch
+						tags := map[string]string{"symbol": symbol}
+						fields := map[string]interface{}{
+							"value":  macd,
+							"signal": signal,
+						}
+
+						point, err := client.NewPoint("macd", tags, fields, timestamp)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+						batch.AddPoint(point)
+
+						// Write the batch
+						err = influx.Write(batch)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+					case "portfolio-positions":
+						positionsMessage := positionsMessage{}
+
+						err = json.Unmarshal(message.Value, &positionsMessage)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", positionsMessage.At)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+
+						for _, position := range positionsMessage.Positions {
 							// Create a point and add to batch
-							tags := map[string]string{"symbol": symbol}
+							tags := map[string]string{"symbol": position.Symbol}
 							fields := map[string]interface{}{
-								"quote": quote,
+								"buy_price": position.AverageBuyPrice,
+								"quote":     position.CurrentQuote,
+								"quantity":  position.Quantity,
 							}
 
-							point, err := client.NewPoint("quotes", tags, fields, timestamp)
+							point, err := client.NewPoint("positions", tags, fields, timestamp)
 							if err != nil {
 								fmt.Println(err)
 								continue
@@ -141,182 +259,60 @@ func main() {
 								fmt.Println(err)
 								continue
 							}
-						case "equity-signals":
-							equitySignal := signalMessage{}
+						}
 
-							err = json.Unmarshal(message.Value, &equitySignal)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+					case "portfolio-stats":
+						stat := portfolioMessage{}
 
-							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", equitySignal.At)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+						err = json.Unmarshal(message.Value, &stat)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
 
-							signal := equitySignal.Value
+						timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", stat.At)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
 
-							// Create a point and add to batch
-							tags := map[string]string{"symbol": symbol}
-							fields := map[string]interface{}{
-								"value": signal,
-							}
+						buyingPower, err := strconv.ParseFloat(stat.BuyingPower, 32)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
 
-							point, err := client.NewPoint("signals", tags, fields, timestamp)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-							batch.AddPoint(point)
+						equity, err := strconv.ParseFloat(stat.Equity, 32)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
 
-							// Write the batch
-							err = influx.Write(batch)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-						case "macd-stats":
-							stat := macdMessage{}
+						// Create a point and add to batch
+						tags := map[string]string{}
+						fields := map[string]interface{}{
+							"buying_power": buyingPower,
+							"equity":       equity,
+						}
 
-							err = json.Unmarshal(message.Value, &stat)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+						point, err := client.NewPoint("portfolio", tags, fields, timestamp)
+						if err != nil {
+							fmt.Println(err)
+							continue
+						}
+						batch.AddPoint(point)
 
-							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", stat.At)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							macd, err := strconv.ParseFloat(stat.Macd, 32)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							signal, err := strconv.ParseFloat(stat.MacdSignal, 32)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							// Create a point and add to batch
-							tags := map[string]string{"symbol": symbol}
-							fields := map[string]interface{}{
-								"value":  macd,
-								"signal": signal,
-							}
-
-							point, err := client.NewPoint("macd", tags, fields, timestamp)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-							batch.AddPoint(point)
-
-							// Write the batch
-							err = influx.Write(batch)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-						case "portfolio-positions":
-							positionsMessage := positionsMessage{}
-
-							err = json.Unmarshal(message.Value, &positionsMessage)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", positionsMessage.At)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							for _, position := range positionsMessage.Positions {
-								// Create a point and add to batch
-								tags := map[string]string{"symbol": position.Symbol}
-								fields := map[string]interface{}{
-									"buy_price": position.AverageBuyPrice,
-									"quote":     position.CurrentQuote,
-									"quantity":  position.Quantity,
-								}
-
-								point, err := client.NewPoint("positions", tags, fields, timestamp)
-								if err != nil {
-									fmt.Println(err)
-									continue
-								}
-								batch.AddPoint(point)
-
-								// Write the batch
-								err = influx.Write(batch)
-								if err != nil {
-									fmt.Println(err)
-									continue
-								}
-							}
-
-						case "portfolio-stats":
-							stat := portfolioMessage{}
-
-							err = json.Unmarshal(message.Value, &stat)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							timestamp, err := time.Parse("2006-01-02 15:04:05 -0700", stat.At)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							buyingPower, err := strconv.ParseFloat(stat.BuyingPower, 32)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							equity, err := strconv.ParseFloat(stat.Equity, 32)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-
-							// Create a point and add to batch
-							tags := map[string]string{}
-							fields := map[string]interface{}{
-								"buying_power": buyingPower,
-								"equity":       equity,
-							}
-
-							point, err := client.NewPoint("portfolio", tags, fields, timestamp)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
-							batch.AddPoint(point)
-
-							// Write the batch
-							err = influx.Write(batch)
-							if err != nil {
-								fmt.Println(err)
-								continue
-							}
+						// Write the batch
+						err = influx.Write(batch)
+						if err != nil {
+							fmt.Println(err)
+							continue
 						}
 					}
-				}
-			}(topics[index])
-		}
 
-		waitgroup.Wait()
+					consumer.MarkOffset(message, "") // mark message as processed
+				}
+			}
+		}
 	}
 }
