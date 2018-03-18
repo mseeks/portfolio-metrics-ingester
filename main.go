@@ -43,11 +43,11 @@ type portfolioMessage struct {
 
 type positionsMessage struct {
 	Positions []struct {
-		AverageBuyPrice float32 `json:"average_buy_price"`
-		CurrentQuote    float32 `json:"current_quote"`
-		Name            string  `json:"name"`
-		Quantity        float32 `json:"quantity"`
-		Symbol          string  `json:"symbol"`
+		AverageBuyPrice string `json:"average_buy_price"`
+		CurrentQuote    string `json:"current_quote"`
+		Name            string `json:"name"`
+		Quantity        string `json:"quantity"`
+		Symbol          string `json:"symbol"`
 	} `json:"positions"`
 	At string `json:"at"`
 }
@@ -238,12 +238,30 @@ func main() {
 						}
 
 						for _, position := range positionsMessage.Positions {
+							buyPrice, err := strconv.ParseFloat(position.AverageBuyPrice, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							quote, err := strconv.ParseFloat(position.CurrentQuote, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
+							quantity, err := strconv.ParseFloat(position.Quantity, 32)
+							if err != nil {
+								fmt.Println(err)
+								continue
+							}
+
 							// Create a point and add to batch
 							tags := map[string]string{"symbol": position.Symbol}
 							fields := map[string]interface{}{
-								"buy_price": position.AverageBuyPrice,
-								"quote":     position.CurrentQuote,
-								"quantity":  position.Quantity,
+								"buy_price": buyPrice,
+								"quote":     quote,
+								"quantity":  quantity,
 							}
 
 							point, err := client.NewPoint("positions", tags, fields, timestamp)
